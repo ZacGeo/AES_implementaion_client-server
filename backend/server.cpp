@@ -1,36 +1,63 @@
-#include  <cstring>
-#include  <unistd.h>
-#include  <sys/socket.h>
-#include  <netinet/in.h>
 #include <iostream>
+#include <cstring>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
 
 using namespace std;
 
 int main() { 
-    //creating socket
     int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
 
-    //Defining Server Address
     sockaddr_in serverAddress;
     serverAddress.sin_family = AF_INET;
     serverAddress.sin_port = htons(8080);
     serverAddress.sin_addr.s_addr = INADDR_ANY;
 
-    //Bind Socket to Address
     bind(serverSocket, (struct sockaddr*)&serverAddress, sizeof(serverAddress));
-
-    //Listen for incoming connections
     listen(serverSocket, 5);
 
-    //Accept Client Connection
-    int clientSocket = accept(serverSocket, nullptr,nullptr);
+    cout << "Server is listening on port 8080..." << endl;
 
-    //Receive Data from Client
+    int clientSocket = accept(serverSocket, nullptr, nullptr);
+    cout << "Client connected!" << endl;
+
     char buffer[1024] = {0};
-    recv(clientSocket, buffer, sizeof(buffer), 0);
-    cout <<"Message from client: " << buffer << endl;
+    string response;
 
+    // Start the communication loop
+    while (true) {
+        // Clear buffer and wait for client message
+        memset(buffer, 0, sizeof(buffer));
+        int bytesReceived = recv(clientSocket, buffer, sizeof(buffer), 0);
+        
+        // If bytesReceived is 0 or less, the client disconnected
+        if (bytesReceived <= 0) {
+            cout << "Client disconnected or logged off." << endl;
+            break;
+        }
+
+        string receivedMessage(buffer);
+        if (receivedMessage == "exit") {
+            cout << "Client initiated log off." << endl;
+            break;
+        }
+
+        cout << "Client: " << buffer << endl;
+
+        // Type and send a reply
+        cout << "You: ";
+        getline(cin, response);
+        send(clientSocket, response.c_str(), response.length(), 0);
+        
+        if (response == "exit") {
+            cout << "Logging off..." << endl;
+            break;
+        }
+    }
+
+    // Always close BOTH sockets on the server side
+    close(clientSocket);
     close(serverSocket);
-    
-
+    return 0;
 }
