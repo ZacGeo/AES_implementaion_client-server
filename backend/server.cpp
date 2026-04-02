@@ -1,63 +1,76 @@
 #include <iostream>
-#include <cstring>
-#include <unistd.h>
-#include <sys/socket.h>
+#include <vector>
+#include <string>
+#include <thread>
+#include <mutex>
 #include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#include <algorithm>
+#include <cstring>
 
 using namespace std;
 
-int main() { 
-    int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
+// We need a mutex to protect the shared vector from simultaneous access
+vector<int> clients;
+mutex clientsMutex;
 
+void handleClient(int clientSocket) {
+    char buffer[1024];
+    while (true) {
+        memset(buffer, 0, sizeof(buffer));
+        int bytesReceived = recv(clientSocket, buffer, sizeof(buffer), 0);
+
+        if (bytesReceived <= 0) {
+            cout << "A client disconnected." << endl;
+            break;
+        }
+
+        string msg = string(buffer);
+        cout << "Relaying: " << msg << endl;
+
+        // --- ROUTING LOGIC ---
+        lock_guard<mutex> lock(clientsMutex);
+        for (int socket : clients) {
+            if (socket != clientSocket) { // Don't send it back to the sender
+                send(socket, msg.c_str(), msg.length(), 0);
+            }
+        }
+    }
+
+    // Cleanup when client leaves
+    close(clientSocket);
+    lock_guard<mutex> lock(clientsMutex);
+    clients.erase(remove(clients.begin(), clients.end(), clientSocket), clients.end());
+}
+
+int main() {
+    int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in serverAddress;
     serverAddress.sin_family = AF_INET;
     serverAddress.sin_port = htons(8080);
     serverAddress.sin_addr.s_addr = INADDR_ANY;
 
     bind(serverSocket, (struct sockaddr*)&serverAddress, sizeof(serverAddress));
-    listen(serverSocket, 5);
+    listen(serverSocket, 10);
 
-    cout << "Server is listening on port 8080..." << endl;
+    cout << "Server Multi-Client Hub started on port 8080..." << endl;
 
-    int clientSocket = accept(serverSocket, nullptr, nullptr);
-    cout << "Client connected!" << endl;
-
-    char buffer[1024] = {0};
-    string response;
-
-    // Start the communication loop
     while (true) {
-        // Clear buffer and wait for client message
-        memset(buffer, 0, sizeof(buffer));
-        int bytesReceived = recv(clientSocket, buffer, sizeof(buffer), 0);
+        int clientSocket = accept(serverSocket, nullptr, nullptr);
         
-        // If bytesReceived is 0 or less, the client disconnected
-        if (bytesReceived <= 0) {
-            cout << "Client disconnected or logged off." << endl;
-            break;
+        {
+            lock_guard<mutex> lock(clientsMutex);
+            clients.push_back(clientSocket);
         }
 
-        string receivedMessage(buffer);
-        if (receivedMessage == "exit") {
-            cout << "Client initiated log off." << endl;
-            break;
-        }
+        cout << "New connection! Total clients: " << clients.size() << endl;
 
-        cout << "Client: " << buffer << endl;
-
-        // Type and send a reply
-        cout << "You: ";
-        getline(cin, response);
-        send(clientSocket, response.c_str(), response.length(), 0);
-        
-        if (response == "exit") {
-            cout << "Logging off..." << endl;
-            break;
-        }
+        // Spawn a thread for this specific client
+        thread t(handleClient, clientSocket);
+        t.detach(); // Let the thread run independently
     }
 
-    // Always close BOTH sockets on the server side
-    close(clientSocket);
     close(serverSocket);
     return 0;
 }

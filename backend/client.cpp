@@ -1,10 +1,28 @@
 #include <iostream>
 #include <cstring>
+#include <thread>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
 using namespace std;
+
+// This function runs in the background to listen for messages from the server
+void receiveMessages(int clientSocket) {
+    char buffer[1024];
+    while (true) {
+        memset(buffer, 0, sizeof(buffer));
+        int bytesReceived = recv(clientSocket, buffer, sizeof(buffer), 0);
+        
+        if (bytesReceived <= 0) {
+            cout << "\n[System] Connection lost or server shut down." << endl;
+            exit(0); // Exit the whole program if the server drops
+        }
+
+        // Print the message received from another client (via the server)
+        cout << "\nMessage: " << buffer << "\nYou: " << flush;
+    }
+}
 
 int main() {
     int clientSocket = socket(AF_INET, SOCK_STREAM, 0);
@@ -19,35 +37,22 @@ int main() {
         return 1;
     }
 
-    cout << "Connected to the server! Type 'exit' to log off." << endl;
+    cout << "Connected! Type your messages below (type 'exit' to quit):" << endl;
 
-    char buffer[1024] = {0};
+    // Start the receiver thread
+    thread receiveThread(receiveMessages, clientSocket);
+    receiveThread.detach(); // Let it run independently
+
     string message;
-
-    // Start the communication loop
     while (true) {
         cout << "You: ";
-        getline(cin, message); // Get typed input from user
+        getline(cin, message);
 
-        // Send the message
-        send(clientSocket, message.c_str(), message.length(), 0);
-
-        // If user typed "exit", break the loop
         if (message == "exit") {
-            cout << "Logging off..." << endl;
             break;
         }
 
-        // Clear the buffer and wait for server response
-        memset(buffer, 0, sizeof(buffer)); 
-        int bytesReceived = recv(clientSocket, buffer, sizeof(buffer), 0);
-        
-        if (bytesReceived <= 0) {
-            cout << "Server disconnected." << endl;
-            break;
-        }
-
-        cout << "Server: " << buffer << endl;
+        send(clientSocket, message.c_str(), message.length(), 0);
     }
 
     close(clientSocket);
