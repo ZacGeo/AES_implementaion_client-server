@@ -7,54 +7,53 @@
 
 using namespace std;
 
+string myName;
+
 void receiveMessages(int clientSocket) {
     char buffer[1024];
     while (true) {
         memset(buffer, 0, sizeof(buffer));
-        int bytesReceived = recv(clientSocket, buffer, sizeof(buffer), 0);
-        
-        if (bytesReceived <= 0) {
-            cout << "\n[System] Connection lost." << endl;
+        if (recv(clientSocket, buffer, sizeof(buffer), 0) <= 0) {
+            cout << "\n[Disconnected]" << endl;
             exit(0);
         }
-
-        // Print the message (which now includes the sender's name)
-        cout << "\n" << buffer << "\nYou: " << flush;
+        // \r clears the current line so the incoming message looks clean
+        cout << "\r" << buffer << endl;
+        cout << myName << ": " << flush; 
     }
 }
 
 int main() {
     int clientSocket = socket(AF_INET, SOCK_STREAM, 0);
-
     sockaddr_in serverAddress;
     serverAddress.sin_family = AF_INET;
     serverAddress.sin_port = htons(8080);
     serverAddress.sin_addr.s_addr = INADDR_ANY;
 
     if (connect(clientSocket, (struct sockaddr*)&serverAddress, sizeof(serverAddress)) < 0) {
-        cout << "Connection failed!" << endl;
+        cout << "Connection error." << endl;
         return 1;
     }
 
-    // Ask for a username
-    string name;
     cout << "Enter your name: ";
-    getline(cin, name);
-    cout << "Welcome, " << name << "! (type 'exit' to quit)\n" << endl;
+    getline(cin, myName);
+    
+    // Step 1: Send only the name for the server's registry
+    send(clientSocket, myName.c_str(), myName.length(), 0);
 
-    thread receiveThread(receiveMessages, clientSocket);
-    receiveThread.detach();
+    thread(receiveMessages, clientSocket).detach();
 
     string message;
     while (true) {
-        cout << "You: ";
+        cout << myName << ": " << flush;
         getline(cin, message);
 
         if (message == "exit") break;
+        if (message.empty()) continue;
 
-        // Format the message as "Name: Message"
-        string formattedMessage = name + ": " + message;
-        send(clientSocket, formattedMessage.c_str(), formattedMessage.length(), 0);
+        // Step 2: Send the message formatted with the name
+        string formatted = myName + ": " + message;
+        send(clientSocket, formatted.c_str(), formatted.length(), 0);
     }
 
     close(clientSocket);

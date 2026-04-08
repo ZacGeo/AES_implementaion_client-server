@@ -7,52 +7,53 @@
 
 using namespace std;
 
-// This function runs in the background to listen for messages from the server
+string myName;
+
 void receiveMessages(int clientSocket) {
     char buffer[1024];
     while (true) {
         memset(buffer, 0, sizeof(buffer));
-        int bytesReceived = recv(clientSocket, buffer, sizeof(buffer), 0);
-        
-        if (bytesReceived <= 0) {
-            cout << "\n[System] Connection lost or server shut down." << endl;
-            exit(0); // Exit the whole program if the server drops
+        if (recv(clientSocket, buffer, sizeof(buffer), 0) <= 0) {
+            cout << "\n[Disconnected]" << endl;
+            exit(0);
         }
-
-        // Print the message received from another client (via the server)
-        cout << "\nMessage: " << buffer << "\nYou: " << flush;
+        // \r clears the current line so the incoming message looks clean
+        cout << "\r" << buffer << endl;
+        cout << myName << ": " << flush; 
     }
 }
 
 int main() {
     int clientSocket = socket(AF_INET, SOCK_STREAM, 0);
-
     sockaddr_in serverAddress;
     serverAddress.sin_family = AF_INET;
     serverAddress.sin_port = htons(8080);
     serverAddress.sin_addr.s_addr = INADDR_ANY;
 
     if (connect(clientSocket, (struct sockaddr*)&serverAddress, sizeof(serverAddress)) < 0) {
-        cout << "Connection failed!" << endl;
+        cout << "Connection error." << endl;
         return 1;
     }
 
-    cout << "Connected! Type your messages below (type 'exit' to quit):" << endl;
+    cout << "Enter your name: ";
+    getline(cin, myName);
+    
+    // Step 1: Send only the name for the server's registry
+    send(clientSocket, myName.c_str(), myName.length(), 0);
 
-    // Start the receiver thread
-    thread receiveThread(receiveMessages, clientSocket);
-    receiveThread.detach(); // Let it run independently
+    thread(receiveMessages, clientSocket).detach();
 
     string message;
     while (true) {
-        cout << "You: ";
+        cout << myName << ": " << flush;
         getline(cin, message);
 
-        if (message == "exit") {
-            break;
-        }
+        if (message == "exit") break;
+        if (message.empty()) continue;
 
-        send(clientSocket, message.c_str(), message.length(), 0);
+        // Step 2: Send the message formatted with the name
+        string formatted = myName + ": " + message;
+        send(clientSocket, formatted.c_str(), formatted.length(), 0);
     }
 
     close(clientSocket);
