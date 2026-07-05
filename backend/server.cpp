@@ -7,53 +7,59 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <cstring>
+#include <condition_variable>
+#include <chrono>
+#include "framing.hpp"
 
 using namespace std;
+
+mutex serverMutex;
+condition_variable partnerCV;
 
 struct Client {
     int socket;
     string name;
-    int partnerSocket = -1; // Socket of the person they are talking to
+    int partnerSocket = -1;
 };
 
-// Global state
-vector<Client*> lobby; 
-mutex serverMutex;
+vector<Client*> lobby;
 
 void handlePrivateChat(Client* me) {
-    char buffer[1024];
-    
-    // 1. Wait until a partner is assigned
-    while (true) {
-        {
-            lock_guard<mutex> lock(serverMutex);
-            if (me->partnerSocket != -1) break;
-        }
-        usleep(100000); // Sleep 100ms to save CPU
-    }
 
-    send(me->socket, "[Server] Partner found! You can now chat.\n", 42, 0);
+    // 1. Wait for partner using condition variable — correct placement
+    {
+        unique_lock<mutex> lock(serverMutex);
+        bool paired = partnerCV.wait_for(
+            lock,
+            chrono::minutes(5),
+            [me] { return me->partnerSocket != -1; }
+        );
 
-    // 2. Chat loop - Only relay to the partner
-    while (true) {
-        memset(buffer, 0, sizeof(buffer));
-        int bytesReceived = recv(me->socket, buffer, sizeof(buffer), 0);
-
-        if (bytesReceived <= 0) break;
-
-        {
-            lock_guard<mutex> lock(serverMutex);
-            if (me->partnerSocket != -1) {
-                send(me->partnerSocket, buffer, bytesReceived, 0);
-            }
+        if (!paired) {
+            sendMsg(me->socket, "[Server] No partner found. Disconnecting.");
+            close(me->socket);
+            delete me;
+            return;
         }
     }
 
-    // 3. Handle Disconnect
+    sendMsg(me->socket, "[Server] Partner found! You can now chat.");
+
+    // 2. Chat loop — all framed
+    while (true) {
+        string buffer;
+        if (!recvMsg(me->socket, buffer)) break;
+
+        lock_guard<mutex> lock(serverMutex);
+        if (me->partnerSocket != -1) {
+            sendMsg(me->partnerSocket, buffer);
+        }
+    }
+
+    // 3. Handle disconnect
     lock_guard<mutex> lock(serverMutex);
     if (me->partnerSocket != -1) {
-        send(me->partnerSocket, "[Server] Your partner left the chat.", 36, 0);
-        // Logic to handle remaining partner could go here
+        sendMsg(me->partnerSocket, "[Server] Your partner left the chat.");
     }
     close(me->socket);
     delete me;
@@ -61,25 +67,18 @@ void handlePrivateChat(Client* me) {
 
 int main() {
     int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
-    if (serverSocket == -1) {
-        perror("Socket creation failed");
-        return 1;
-    }
+    if (serverSocket == -1) { perror("Socket creation failed"); return 1; }
 
-    // This line allows you to rerun the server immediately without "Address already in use" errors
     int opt = 1;
     setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
     sockaddr_in addr = {AF_INET, htons(8080), INADDR_ANY};
-    
-    if (bind(serverSocket, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        perror("Bind failed");
-        return 1;
-    }
 
+    if (bind(serverSocket, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        perror("Bind failed"); return 1;
+    }
     if (listen(serverSocket, 10) < 0) {
-        perror("Listen failed");
-        return 1;
+        perror("Listen failed"); return 1;
     }
 
     cout << "Private Matchmaking Server Online on port 8080..." << endl;
@@ -88,38 +87,33 @@ int main() {
 
     while (true) {
         int clientSock = accept(serverSocket, nullptr, nullptr);
-        if (clientSock < 0) {
-            perror("Accept failed");
+        if (clientSock < 0) { perror("Accept failed"); continue; }
+
+        // Receive name using framing — matches client's sendMsg
+        string clientName;
+        if (!recvMsg(clientSock, clientName)) {
+            close(clientSock);
             continue;
         }
-        
-        // Receive name
-        char nameBuf[1024] = {0};
-        recv(clientSock, nameBuf, sizeof(nameBuf), 0);
-        
-        Client* newClient = new Client{clientSock, string(nameBuf)};
-        
+
+        Client* newClient = new Client{clientSock, clientName};
+
         lock_guard<mutex> lock(serverMutex);
         if (waitingClient == nullptr) {
             waitingClient = newClient;
-            string msg = "[Server] Hi " + newClient->name + ", waiting for a partner...\n";
-            send(clientSock, msg.c_str(), msg.length(), 0);
+            sendMsg(clientSock, "[Server] Hi " + newClient->name + ", waiting for a partner...");
+            thread(handlePrivateChat, newClient).detach(); // starts and blocks on partnerCV
         } else {
             newClient->partnerSocket = waitingClient->socket;
             waitingClient->partnerSocket = newClient->socket;
-            
-            // Notify both that they are paired
-            string startMsg = "[Server] Connected to your partner!\n";
-            send(newClient->socket, startMsg.c_str(), startMsg.length(), 0);
-            send(waitingClient->socket, startMsg.c_str(), startMsg.length(), 0);
+            partnerCV.notify_all(); // wake up the waiting thread
 
-            // Start the thread for the WAITING client now that they have a partner
-            thread(handlePrivateChat, waitingClient).detach();
-            waitingClient = nullptr; 
+            sendMsg(newClient->socket, "[Server] Connected to your partner!");
+            sendMsg(waitingClient->socket, "[Server] Connected to your partner!");
+
+            thread(handlePrivateChat, newClient).detach();
+            waitingClient = nullptr;
         }
-        
-        // Start the thread for the NEW client
-        thread(handlePrivateChat, newClient).detach();
     }
     return 0;
 }

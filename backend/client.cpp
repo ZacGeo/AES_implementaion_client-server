@@ -4,22 +4,22 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <arpa/inet.h>
+#include "framing.hpp"
 
 using namespace std;
 
 string myName;
 
 void receiveMessages(int clientSocket) {
-    char buffer[1024];
     while (true) {
-        memset(buffer, 0, sizeof(buffer));
-        if (recv(clientSocket, buffer, sizeof(buffer), 0) <= 0) {
+        string buffer;
+        if (!recvMsg(clientSocket, buffer)) {
             cout << "\n[Disconnected]" << endl;
             exit(0);
         }
-        // \r clears the current line so the incoming message looks clean
         cout << "\r" << buffer << endl;
-        cout << myName << ": " << flush; 
+        cout << myName << ": " << flush;
     }
 }
 
@@ -28,7 +28,12 @@ int main() {
     sockaddr_in serverAddress;
     serverAddress.sin_family = AF_INET;
     serverAddress.sin_port = htons(8080);
-    serverAddress.sin_addr.s_addr = INADDR_ANY;
+
+    string serverIP;
+    cout << "Enter server IP (or press Enter for localhost): ";
+    getline(cin, serverIP);
+    if (serverIP.empty()) serverIP = "127.0.0.1"; // fixed in client2 too
+    serverAddress.sin_addr.s_addr = inet_addr(serverIP.c_str());
 
     if (connect(clientSocket, (struct sockaddr*)&serverAddress, sizeof(serverAddress)) < 0) {
         cout << "Connection error." << endl;
@@ -37,9 +42,8 @@ int main() {
 
     cout << "Enter your name: ";
     getline(cin, myName);
-    
-    // Step 1: Send only the name for the server's registry
-    send(clientSocket, myName.c_str(), myName.length(), 0);
+
+    sendMsg(clientSocket, myName);
 
     thread(receiveMessages, clientSocket).detach();
 
@@ -47,13 +51,9 @@ int main() {
     while (true) {
         cout << myName << ": " << flush;
         getline(cin, message);
-
         if (message == "exit") break;
         if (message.empty()) continue;
-
-        // Step 2: Send the message formatted with the name
-        string formatted = myName + ": " + message;
-        send(clientSocket, formatted.c_str(), formatted.length(), 0);
+        sendMsg(clientSocket, myName + ": " + message);
     }
 
     close(clientSocket);
