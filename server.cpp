@@ -49,6 +49,7 @@ void handlePrivateChat(Client* me) {
     while (true) {
         string buffer;
         if (!recvMsg(me->socket, buffer)) break;
+        cout << "[Relay] " << me->name << " -> encrypted bytes: " << buffer.size() << " bytes" << endl;
 
         lock_guard<mutex> lock(serverMutex);
         if (me->partnerSocket != -1) {
