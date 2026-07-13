@@ -27,7 +27,7 @@ int main() {
     int clientSocket = socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in serverAddress;
     serverAddress.sin_family = AF_INET;
-    serverAddress.sin_port = htons(8080);
+    serverAddress.sin_port = htons(8081);
 
     string serverIP;
     cout << "Enter server IP (or press Enter for localhost): ";
