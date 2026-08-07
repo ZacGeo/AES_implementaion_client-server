@@ -284,18 +284,19 @@ void keyExpansion(const uint8_t key[AES_KEY_SIZE],
                          ((uint32_t)key[4*i + 3]      );
     }
 
-    // Generate the remaining 40 words
+    // Dedicated Rcon counter — increments only at key boundaries
+    int rconIndex = 1;
+
     for (int i = AES_KEY_WORDS; i < AES_TOTAL_WORDS; i++) {
         uint32_t temp = expandedKey[i - 1];
 
-        // numDigits(i, AES_KEY_WORDS) tells us if i is a multiple of 4
-        // specifically: i % AES_KEY_WORDS == 0 when i is at a key boundary
+        // Use divMod to detect key boundary (i divisible by 4)
         unsigned int q, r;
-        divMod(i, AES_KEY_WORDS, &q, &r);
+        divMod((unsigned int)i, (unsigned int)AES_KEY_WORDS, &q, &r);
 
         if (r == 0) {
-            // Key boundary: apply RotWord + SubWord + Rcon
-            temp = subWord(rotWord(temp)) ^ ((uint32_t)RCON[q] << 24);
+            temp = subWord(rotWord(temp)) ^ ((uint32_t)RCON[rconIndex] << 24);
+            rconIndex++;
         }
 
         expandedKey[i] = expandedKey[i - AES_KEY_WORDS] ^ temp;
