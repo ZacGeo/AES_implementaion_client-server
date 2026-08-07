@@ -1,9 +1,11 @@
 #ifndef CMATHEMATICS_H
 #define CMATHEMATICS_H
 
+#ifndef __cplusplus
 typedef unsigned char bool;
 #define false 0
 #define true !false
+#endif
 
 /**
  * calculates the number of arguments in a __VA_ARGS__ list
