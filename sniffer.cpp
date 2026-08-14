@@ -5,6 +5,7 @@
 #include <string>
 #include <iomanip>
 #include <sstream>
+#include <thread>           // ← ADD THIS
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
@@ -15,18 +16,8 @@
 //  Sits between client and server, reads ALL traffic in both
 //  directions. Before AES: sees plaintext messages.
 //  After AES: sees only binary gibberish.
-//
-//  HOW IT WORKS:
-//  Normal:   Client ──────────────────► Server
-//  With us:  Client ──► Sniffer(us) ──► Server
-//
-//  Port layout:
-//    Real server runs on  : 8080
-//    Sniffer listens on   : 8081  (clients connect here instead)
-//    Sniffer forwards to  : 8080  (the real server)
 // ============================================================
 
-// ANSI color codes for terminal output
 #define RED     "\033[1;31m"
 #define GREEN   "\033[1;32m"
 #define YELLOW  "\033[1;33m"
@@ -35,12 +26,10 @@
 #define RESET   "\033[0m"
 #define BOLD    "\033[1m"
 
-// The real server address
 const char* REAL_SERVER_IP   = "127.0.0.1";
 const int   REAL_SERVER_PORT = 8080;
-const int   SNIFFER_PORT     = 8081;  // clients connect to this port
+const int   SNIFFER_PORT     = 8081;
 
-// ── Timestamp helper ─────────────────────────────────────────
 std::string timestamp() {
     time_t now = time(nullptr);
     char buf[20];
@@ -48,7 +37,6 @@ std::string timestamp() {
     return std::string(buf);
 }
 
-// ── Hex dump — shows raw bytes (critical for after-AES demo) ─
 std::string hexDump(const std::string& data) {
     std::ostringstream oss;
     for (size_t i = 0; i < data.size(); i++) {
@@ -61,7 +49,6 @@ std::string hexDump(const std::string& data) {
     return oss.str();
 }
 
-// ── Check if data is printable text ──────────────────────────
 bool isPrintable(const std::string& data) {
     for (unsigned char c : data) {
         if (c < 0x20 && c != '\n' && c != '\r' && c != '\t')
@@ -71,19 +58,17 @@ bool isPrintable(const std::string& data) {
     return true;
 }
 
-// ── Reliably read exactly 'len' bytes from socket ────────────
 bool recvAll(int sock, void* data, size_t len) {
     char* ptr = static_cast<char*>(data);
     while (len > 0) {
         ssize_t received = recv(sock, ptr, len, 0);
         if (received <= 0) return false;
-        ptr      += received;
-        len      -= received;
+        ptr += received;
+        len -= received;
     }
     return true;
 }
 
-// ── Reliably send exactly 'len' bytes to socket ──────────────
 bool sendAll(int sock, const void* data, size_t len) {
     const char* ptr = static_cast<const char*>(data);
     while (len > 0) {
@@ -95,32 +80,27 @@ bool sendAll(int sock, const void* data, size_t len) {
     return true;
 }
 
-// ── Read one framed message, log it, forward it ──────────────
-//   direction: "CLIENT→SERVER" or "SERVER→CLIENT"
-//   color:     ANSI color for this direction
+// ── Intercept one framed message, log it, forward it ─────────
 bool interceptMessage(int fromSock, int toSock,
                       const std::string& direction,
                       const char* color,
                       const std::string& label) {
 
-    // Step 1 — Read the 4-byte length header
     uint32_t netLen = 0;
     if (!recvAll(fromSock, &netLen, 4)) return false;
 
     uint32_t msgLen = ntohl(netLen);
 
-    // Sanity check — same limit as framing.hpp
     if (msgLen == 0 || msgLen > 65536) {
-        std::cout << RED << "[!] Suspicious message length: "
-                  << msgLen << " — dropping." << RESET << "\n";
+        std::cout << RED << "[!] Suspicious length: "
+                  << msgLen << RESET << "\n";
         return false;
     }
 
-    // Step 2 — Read the payload
     std::string payload(msgLen, '\0');
     if (!recvAll(fromSock, &payload[0], msgLen)) return false;
 
-    // Step 3 — LOG IT (the hacker reads everything here)
+    // Log the intercepted message
     std::cout << "\n" << BOLD << color
               << "┌─ [" << timestamp() << "] "
               << direction << " ──────────────────────────\n"
@@ -128,12 +108,10 @@ bool interceptMessage(int fromSock, int toSock,
               << "│  Size   : " << msgLen << " bytes\n";
 
     if (isPrintable(payload)) {
-        // Before AES — readable plaintext
         std::cout << "│  Content: " << GREEN << payload << color << "\n"
                   << "│  Status : " << YELLOW
                   << "⚠  PLAINTEXT — hacker can read this!" << color << "\n";
     } else {
-        // After AES — binary garbage
         std::cout << "│  Content: [BINARY DATA — not printable]\n"
                   << "│  Hex    : " << hexDump(payload) << "\n"
                   << "│  Status : " << GREEN
@@ -143,17 +121,17 @@ bool interceptMessage(int fromSock, int toSock,
     std::cout << "└───────────────────────────────────────────────────\n"
               << RESET << std::flush;
 
-    // Step 4 — Forward it unchanged to the real destination
-    if (!sendAll(toSock, &netLen, 4))       return false;  // forward header
-    if (!sendAll(toSock, payload.data(), msgLen)) return false;  // forward payload
+    // Forward unchanged to real destination
+    if (!sendAll(toSock, &netLen, 4))            return false;
+    if (!sendAll(toSock, payload.data(), msgLen)) return false;
 
     return true;
 }
 
-// ── One connection handler: Client <──sniffer──> Server ──────
-void handleConnection(int clientSock) {
+// ── Handle one client connection ──────────────────────────────
+void handleConnection(int clientSock, int clientNum) {
 
-    // Connect to the real server
+    // Connect to real server
     int serverSock = socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in serverAddr;
     serverAddr.sin_family      = AF_INET;
@@ -163,20 +141,16 @@ void handleConnection(int clientSock) {
     if (connect(serverSock,
                 reinterpret_cast<sockaddr*>(&serverAddr),
                 sizeof(serverAddr)) < 0) {
-        std::cout << RED
-                  << "[!] Cannot reach real server on port "
-                  << REAL_SERVER_PORT
-                  << " — is it running?\n" << RESET;
+        std::cout << RED << "[!] Cannot reach real server.\n" << RESET;
         close(clientSock);
         return;
     }
 
     std::cout << CYAN << BOLD
-              << "\n[+] New victim connected. "
-              << "Proxying to real server...\n" << RESET;
+              << "\n[+] Client " << clientNum
+              << " connected. Proxying to server...\n" << RESET;
 
-    // Relay loop — alternate reading from each side
-    // Uses select() to watch both sockets simultaneously
+    // Relay loop — watch both sockets simultaneously
     while (true) {
         fd_set readSet;
         FD_ZERO(&readSet);
@@ -184,28 +158,33 @@ void handleConnection(int clientSock) {
         FD_SET(serverSock, &readSet);
         int maxFd = std::max(clientSock, serverSock) + 1;
 
-        // Block until one of the sockets has data
         int ready = select(maxFd, &readSet, nullptr, nullptr, nullptr);
         if (ready <= 0) break;
 
-        // Data coming FROM client → going TO server
+        // Client → Server
         if (FD_ISSET(clientSock, &readSet)) {
+            std::string dir = "CLIENT " + std::to_string(clientNum)
+                              + " → SERVER";
+            std::string lbl = "Client " + std::to_string(clientNum)
+                              + " sending to server";
             if (!interceptMessage(clientSock, serverSock,
-                                  "CLIENT → SERVER", MAGENTA,
-                                  "Client sending to server")) {
-                std::cout << YELLOW
-                          << "[!] Client disconnected.\n" << RESET;
+                                  dir, MAGENTA, lbl)) {
+                std::cout << YELLOW << "[!] Client "
+                          << clientNum << " disconnected.\n" << RESET;
                 break;
             }
         }
 
-        // Data coming FROM server → going TO client
+        // Server → Client
         if (FD_ISSET(serverSock, &readSet)) {
+            std::string dir = "SERVER → CLIENT "
+                              + std::to_string(clientNum);
+            std::string lbl = "Server sending to client "
+                              + std::to_string(clientNum);
             if (!interceptMessage(serverSock, clientSock,
-                                  "SERVER → CLIENT", CYAN,
-                                  "Server sending to client")) {
-                std::cout << YELLOW
-                          << "[!] Server disconnected.\n" << RESET;
+                                  dir, CYAN, lbl)) {
+                std::cout << YELLOW << "[!] Server disconnected.\n"
+                          << RESET;
                 break;
             }
         }
@@ -213,14 +192,15 @@ void handleConnection(int clientSock) {
 
     close(clientSock);
     close(serverSock);
-    std::cout << RED << "[-] Connection closed.\n" << RESET;
+    std::cout << RED << "[-] Client " << clientNum
+              << " connection closed.\n" << RESET;
 }
 
-// ── Main: listen for clients on SNIFFER_PORT ─────────────────
+// ── Main ──────────────────────────────────────────────────────
 int main() {
 
     std::cout << RED << BOLD << R"(
- ██╗  ██╗ █████╗  ██████╗██╗  ██╗███████╗██████╗ 
+ ██╗  ██╗ █████╗  ██████╗██╗  ██╗███████╗██████╗
  ██║  ██║██╔══██╗██╔════╝██║ ██╔╝██╔════╝██╔══██╗
  ███████║███████║██║     █████╔╝ █████╗  ██████╔╝
  ██╔══██║██╔══██║██║     ██╔═██╗ ██╔══╝  ██╔══██╗
@@ -232,19 +212,11 @@ int main() {
     std::cout << YELLOW << BOLD
               << "  [*] Sniffer listening on port : " << SNIFFER_PORT << "\n"
               << "  [*] Forwarding to real server : "
-              << REAL_SERVER_IP << ":" << REAL_SERVER_PORT << "\n"
-              << "\n"
-              << "  HOW TO USE:\n"
-              << "    1. Start the real server on port 8080\n"
-              << "    2. Start this sniffer\n"
-              << "    3. Connect clients to port 8081 instead of 8080\n"
-              << "    4. Watch ALL traffic appear here in real time\n"
-              << "\n"
-              << "  Before AES → you will see plaintext messages\n"
-              << "  After AES  → you will see binary gibberish\n"
+              << REAL_SERVER_IP << ":" << REAL_SERVER_PORT << "\n\n"
+              << "  Before AES → plaintext messages visible\n"
+              << "  After AES  → binary gibberish only\n"
               << RESET << "\n";
 
-    // Create the sniffer's listening socket
     int snifferSock = socket(AF_INET, SOCK_STREAM, 0);
     int opt = 1;
     setsockopt(snifferSock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
@@ -257,24 +229,21 @@ int main() {
     if (bind(snifferSock,
              reinterpret_cast<sockaddr*>(&snifferAddr),
              sizeof(snifferAddr)) < 0) {
-        perror("Bind failed");
-        return 1;
+        perror("Bind failed"); return 1;
     }
-
     if (listen(snifferSock, 10) < 0) {
-        perror("Listen failed");
-        return 1;
+        perror("Listen failed"); return 1;
     }
 
     std::cout << GREEN << BOLD
               << "[*] Sniffer ready. Waiting for victims...\n\n"
               << RESET;
 
-    // Accept clients one at a time (sequential, no threading needed
-    // for a demo — add threads here if you want parallel sessions)
+    int clientNum = 1;
+
     while (true) {
         sockaddr_in clientAddr;
-        socklen_t   clientLen = sizeof(clientAddr);
+        socklen_t clientLen = sizeof(clientAddr);
         int clientSock = accept(snifferSock,
                                 reinterpret_cast<sockaddr*>(&clientAddr),
                                 &clientLen);
@@ -284,11 +253,15 @@ int main() {
         }
 
         char clientIP[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &clientAddr.sin_addr, clientIP, sizeof(clientIP));
+        inet_ntop(AF_INET, &clientAddr.sin_addr,
+                  clientIP, sizeof(clientIP));
         std::cout << CYAN << "[+] Connection from: "
-                  << clientIP << RESET << "\n";
+                  << clientIP << " (Client " << clientNum << ")"
+                  << RESET << "\n";
 
-        handleConnection(clientSock);
+        // ── KEY FIX: spawn a thread per client ───────────────
+        std::thread(handleConnection, clientSock, clientNum).detach();
+        clientNum++;
     }
 
     close(snifferSock);
