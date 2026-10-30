@@ -5,7 +5,7 @@
 #include <string>
 #include <iomanip>
 #include <sstream>
-#include <thread>           // ← ADD THIS
+#include <thread>           
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
@@ -199,15 +199,7 @@ void handleConnection(int clientSock, int clientNum) {
 // ── Main ──────────────────────────────────────────────────────
 int main() {
 
-    std::cout << RED << BOLD << R"(
- ██╗  ██╗ █████╗  ██████╗██╗  ██╗███████╗██████╗
- ██║  ██║██╔══██╗██╔════╝██║ ██╔╝██╔════╝██╔══██╗
- ███████║███████║██║     █████╔╝ █████╗  ██████╔╝
- ██╔══██║██╔══██║██║     ██╔═██╗ ██╔══╝  ██╔══██╗
- ██║  ██║██║  ██║╚██████╗██║  ██╗███████╗██║  ██║
- ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝
-    MAN-IN-THE-MIDDLE SNIFFER  |  Educational Use
-)" << RESET;
+    std::cout << RED << BOLD << R"(MAN-IN-THE-MIDDLE SNIFFER  |  Educational Use)" << RESET;
 
     std::cout << YELLOW << BOLD
               << "  [*] Sniffer listening on port : " << SNIFFER_PORT << "\n"

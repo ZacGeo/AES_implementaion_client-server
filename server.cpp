@@ -22,11 +22,8 @@ struct Client {
     int partnerSocket = -1;
 };
 
-vector<Client*> lobby;
-
 void handlePrivateChat(Client* me) {
 
-    // 1. Wait for partner using condition variable — correct placement
     {
         unique_lock<mutex> lock(serverMutex);
         bool paired = partnerCV.wait_for(
@@ -45,7 +42,6 @@ void handlePrivateChat(Client* me) {
 
     sendMsg(me->socket, "[Server] Partner found! You can now chat.");
 
-    // 2. Chat loop — all framed
     while (true) {
         string buffer;
         if (!recvMsg(me->socket, buffer)) break;
@@ -57,7 +53,6 @@ void handlePrivateChat(Client* me) {
         }
     }
 
-    // 3. Handle disconnect
     lock_guard<mutex> lock(serverMutex);
     if (me->partnerSocket != -1) {
         sendMsg(me->partnerSocket, "[Server] Your partner left the chat.");
@@ -90,7 +85,6 @@ int main() {
         int clientSock = accept(serverSocket, nullptr, nullptr);
         if (clientSock < 0) { perror("Accept failed"); continue; }
 
-        // Receive name using framing — matches client's sendMsg
         string clientName;
         if (!recvMsg(clientSock, clientName)) {
             close(clientSock);
@@ -103,11 +97,11 @@ int main() {
         if (waitingClient == nullptr) {
             waitingClient = newClient;
             sendMsg(clientSock, "[Server] Hi " + newClient->name + ", waiting for a partner...");
-            thread(handlePrivateChat, newClient).detach(); // starts and blocks on partnerCV
+            thread(handlePrivateChat, newClient).detach();
         } else {
             newClient->partnerSocket = waitingClient->socket;
             waitingClient->partnerSocket = newClient->socket;
-            partnerCV.notify_all(); // wake up the waiting thread
+            partnerCV.notify_all();
 
             sendMsg(newClient->socket, "[Server] Connected to your partner!");
             sendMsg(waitingClient->socket, "[Server] Connected to your partner!");

@@ -65,4 +65,4 @@ unsigned int numDigits(unsigned int val, unsigned int base);
  */
 unsigned long long numDigitsLL(unsigned long long val, unsigned long long base);
 
-#endif // CMATHEMATICS_H
+#endif 
